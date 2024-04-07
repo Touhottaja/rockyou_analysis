@@ -3,11 +3,11 @@ import logging
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+from collections import Counter
 from pyspark.sql import SparkSession
-from wordcloud import WordCloud
 
-LINE_READ_LIMIT = 100000  # Limit the number of lines read from the file
-HEATMAP_CHARACTER_COUNT = 16  # Number of characters to analyze in the heatmap
+LINE_READ_LIMIT = 1000000  # Limit the number of lines read from the file
+HEATMAP_CHARACTER_COUNT = 8  # Number of characters to analyze in the heatmap
 
 # Files and directories
 ROCKYOU_FILE = "rockyou.txt"
@@ -50,6 +50,34 @@ def fetch_passwords_using_regex(pandas_df: pd.DataFrame,
     return filtered_df
 
 
+def find_most_common_words(pandas_df: pd.DataFrame, limit: int) -> None:
+    """
+    Finds the most common words in the passwords and prints them.
+
+    :param pandas_df: Pandas DataFrame containing a column of passwords.
+    """
+    logger.info(f"Finding the {limit} most common words in the passwords")
+
+    # Get a list of all words in the passwords
+    all_words = " ".join(pandas_df["value"]).split()
+
+    # Count the frequency of each word
+    word_counts = Counter(all_words)
+
+    # Print the most common words
+    for word, count in word_counts.most_common(limit):
+        logger.info(f"{word}: {count} occurrences")
+
+    # Check if the most common words are used as substrings, add the occurrences
+    # of the substrings to the count
+    for word, count in word_counts.most_common(limit):
+        substring_count = 0
+        for password in pandas_df["value"]:
+            if word in password:
+                substring_count += 1
+        logger.info(f"{word} (substring): {substring_count} occurrences")
+
+
 def plot_character_heatmap(pandas_df: pd.DataFrame,
                            character_count: int) -> None:
     """
@@ -61,7 +89,7 @@ def plot_character_heatmap(pandas_df: pd.DataFrame,
     logger.info("Creating character frequency heatmap")
 
     # Define the characters to analyze
-    characters = 'abcdefghijklmnopqrstuvwxyz0123456789'
+    characters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=.,<>?;:[]{}|\\/'
     # Initialize a matrix to track character frequencies by position
     heatmap_data = {char: [0]*character_count for char in characters}
 
@@ -127,34 +155,59 @@ def plot_password_lengths(pandas_df: pd.DataFrame) -> None:
                 f"{PLOTS_DIR}/password_length_histogram.png")
 
 
-def plot_word_cloud(pandas_df: pd.DataFrame) -> None:
+def plot_word_length(pandas_df: pd.DataFrame) -> None:
     """
-    Creates a word cloud from the passwords in the DataFrame.
+    creates a box plot of the lengths of the words in the passwords.
 
     :param pandas_df: Pandas DataFrame containing a column of passwords.
     """
-    logger.info("Creating word cloud")
+    logger.info("Creating box plot of word lengths")
 
-    # Combine all passwords into a single string
-    text = " ".join(pandas_df["value"])
+    # Measure the length of each word
+    pandas_df["word_len"] = pandas_df["value"].apply(len)
 
-    # Generate a word cloud image
-    wordcloud = WordCloud(width=800,
-                          height=400,
-                          background_color="white").generate(text)
+    # Show the length range
+    logger.info(f"Word length range: {pandas_df['word_len'].min()} to " \
+                f"{pandas_df['word_len'].max()} characters")
 
-    # Display the generated image:
-    plt.figure(figsize=(15, 10))
-    plt.imshow(wordcloud, interpolation="bilinear")
-    plt.axis("off")
-    plt.title(f"Word Cloud For the First {LINE_READ_LIMIT} Passwords")
+    # Show the shortest and longest words
+    logger.info("Shortest word: " \
+                f"{pandas_df['value'][pandas_df['word_len'].idxmin()]}")
+    logger.info("Longest word: " \
+                f"{pandas_df['value'][pandas_df['word_len'].idxmax()]}")
 
-    # Save the word cloud
-    word_cloud_filename = f"{PLOTS_DIR}/passwords_word_cloud.png"
-    plt.savefig(word_cloud_filename)
-    logger.info(f"Saved word cloud to {word_cloud_filename}")
+    # Show the average word length
+    logger.info(f"Average word length: {pandas_df['word_len'].mean()} " \
+                "characters")
 
-    plt.close()  # Close the plot to avoid displaying it inline if not desired
+    # Show the median word length
+    logger.info(f"Median word length: {pandas_df['word_len'].median()} " \
+                "characters")
+
+    # Show the standard deviation of word lengths
+    logger.info(f"Standard deviation of word lengths: " \
+                f"{pandas_df['word_len'].std()} characters")
+
+    # Remove passwords with word lengths greater than 16
+    pandas_df = pandas_df[pandas_df["word_len"] <= 16]
+
+    # Plot the word length box plot
+    plt.figure(figsize=(10, 6))
+    sns.boxplot(pandas_df["word_len"])
+    plt.title(f"Box Plot of Word Lengths For the First {LINE_READ_LIMIT} " \
+              "Passwords (Words <= 16 Characters)")
+    plt.ylabel("Password length")
+
+    # Plot y-axis every 5 characters
+    plt.yticks(range(0, pandas_df["word_len"].max() + 1, 1))
+
+    # Set grid style
+    plt.grid(axis="y", alpha=0.75)
+
+    # Save the plot
+    plt.savefig(f"{PLOTS_DIR}/word_length_boxplot.png")
+    logger.info(f"Saved box plot of word lengths to " \
+                f"{PLOTS_DIR}/word_length_boxplot.png")
 
 
 def read_and_limit_data(filepath: str, limit: int=1000) -> pd.DataFrame:
@@ -184,24 +237,72 @@ def main() -> None:
     df = read_and_limit_data(ROCKYOU_FILE, LINE_READ_LIMIT)
     pandas_df = df.toPandas()
 
+    ###################
+    ## Plot examples ##
+    ###################
+
     # Plot password lengths histogram
-    plot_password_lengths(pandas_df)
+    #plot_password_lengths(pandas_df)
 
     # Plot character heatpmap
-    plot_character_heatmap(pandas_df, HEATMAP_CHARACTER_COUNT)
+    #plot_character_heatmap(pandas_df, HEATMAP_CHARACTER_COUNT)
 
-    # Plot word cloud
-    plot_word_cloud(pandas_df)
+    # Plot word length box plot
+    #plot_word_length(pandas_df)
 
-    ## Fetch numeric passwords
+    # Find most common words
+    #find_most_common_words(pandas_df, 20)
+
+    #################################
+    ## Regular expression examples ##
+    #################################
+
+    # Fetch the count of numeric passwords
     #df = fetch_passwords_using_regex(pandas_df, "^[0-9]+$")
-    #logger.info(f"Numeric passwords: {pandas_df}")
-    ## Fetch alphabetic passwords
+    #logger.info(f"Numeric passwords: {df.count()}")
+
+    # Fetch alphabetic passwords
     #df = fetch_passwords_using_regex(pandas_df, "^[A-Za-z]+$")
-    #logger.info(f"Alphabetic passwords: {pandas_df}")
-    ## Fetch passwords with special characters
+    #logger.info(f"Alphabetic passwords: {df.count()}")
+
+    # Fetch passwords with special characters
     #df = fetch_passwords_using_regex(pandas_df, "[!@#$%^&*(),.?\":{}|<>]+")
-    #logger.info(f"Passwords with special characters: {pandas_df}")
+    #logger.info(f"Passwords with special characters: {df.count()}")
+
+    # Fetch passwords that contain alphanumeric characters and special characters
+    #df = fetch_passwords_using_regex(pandas_df,
+    #    "^(?=.*[A-Za-z0-9])(?=.*[!@#$%^&*(),.?\":{}|<>]).+$")
+    #logger.info(f"Passwords with alphanumeric and special characters: {df.count()}")
+
+    # Fetch passwords that are shorter than 5 characters
+    #df = fetch_passwords_using_regex(pandas_df, "^.{1,5}$")
+    #logger.info(f"Passwords shorter than 5 characters: {df.count()}")
+
+    # Fetch passwords that are between 6-8 characters
+    #df = fetch_passwords_using_regex(pandas_df, "^.{0,16}$")
+    #logger.info(f"Passwords between 6-8 characters: {df.count()}")
+
+    # Fetch passwords with common patterns (e.g. "abc" or "123")
+    # Find patterns that contain abc, e.g. abc and abcdefg
+    #df = fetch_passwords_using_regex(pandas_df, "(abc)")
+    #logger.info(f"Passwords with 'abc' patterns: {df.count()}")
+
+    #df = fetch_passwords_using_regex(pandas_df, "(123)")
+    #logger.info(f"Passwords with '123' patterns: {df.count()}")
+
+    #df = fetch_passwords_using_regex(pandas_df, "(012)")
+    #logger.info(f"Passwords with '012' patterns: {df.count()}")
+
+    #df = fetch_passwords_using_regex(pandas_df, "(qwe)")
+    #logger.info(f"Passwords with 'qwer patterns: {df.count()}")
+
+    #df = fetch_passwords_using_regex(pandas_df, "(asd)")
+    #logger.info(f"Passwords with 'asd' patterns: {df.count()}")
+
+    #df = fetch_passwords_using_regex(pandas_df,
+    #    "^(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[!@#$%^&*(),.?\":{}|<>]).{8,}$")
+    #logger.info("Passwords with alphanumeric and special characters:" \
+    #            f"{df.count()}")
 
 
 if __name__ == "__main__":
